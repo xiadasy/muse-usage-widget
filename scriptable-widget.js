@@ -1,14 +1,15 @@
 // ============================================================
-// Muse 用量挂件（Scriptable）v2 — 白卡风格
-// 参考用户家里的马拉松 / DeepSeek / Quantumult X 挂件：
-// 白底大圆角 + 大数字 + 黑进度条 + 图标明细行。
+// Muse 用量挂件（Scriptable）v3 — 暖米白卡，重点修小尺寸
+// v2 的问题：小尺寸里双大数字 + 长行塞不下，字被裁。
+// v3：小尺寸只放一个大数字 + 短行，全部按小组件实宽 155pt 算过；
+// 底色改成暖米色，配用户壁纸（米白猫窝那张）。
 //
 // 数据源不变：只读 GitHub raw JSON
 // https://raw.githubusercontent.com/xiadasy/muse-usage-widget/main/data/muse_usage.json
 // 由本机定时跑 subscription-status 生成并推送。
 //
-// 安装：Scriptable 新建脚本，粘贴全文，命名 Muse 用量，
-// 长按桌面 -> + -> Scriptable -> 选这个脚本，中号最好看。
+// 安装：Scriptable 里把旧脚本全文盖掉，命名 Muse 用量，
+// 长按桌面 -> + -> Scriptable -> 选这个脚本，选小尺寸。
 // ============================================================
 
 const DATA_URL = "https://raw.githubusercontent.com/xiadasy/muse-usage-widget/main/data/muse_usage.json";
@@ -16,15 +17,15 @@ const DATA_URL = "https://raw.githubusercontent.com/xiadasy/muse-usage-widget/ma
 const TIMEOUT_SECONDS = 15;
 const CACHE_FILE = "muse-usage-cache.json";
 
-// ---------- 配色（白卡风格） ----------
+// ---------- 配色（暖米，配壁纸） ----------
 const C = {
-  bg: new Color("#ffffff"),
-  title: new Color("#111111"),
-  label: new Color("#6b7280"),
-  value: new Color("#111111"),
-  track: new Color("#e5e7eb"),
-  bar: new Color("#111111"),
-  footer: new Color("#9ca3af"),
+  bg: new Color("#fbf6ec"),
+  title: new Color("#241a12"),
+  label: new Color("#8a7a66"),
+  value: new Color("#241a12"),
+  track: new Color("#e9dfc9"),
+  bar: new Color("#241a12"),
+  footer: new Color("#a08b74"),
 };
 
 // ---------- 小工具 ----------
@@ -99,13 +100,13 @@ async function fetchData() {
 }
 
 // ---------- 组件 ----------
-function addPill(parent, text, bgHex, fgHex) {
+function addPill(parent, text, bgHex, fgHex, fontSize) {
   const pill = parent.addStack();
   pill.backgroundColor = new Color(bgHex);
-  pill.cornerRadius = 9;
-  pill.setPadding(3, 8, 3, 8);
+  pill.cornerRadius = 8;
+  pill.setPadding(2, 7, 2, 7);
   const t = pill.addText(text);
-  t.font = Font.semiboldSystemFont(11);
+  t.font = Font.semiboldSystemFont(fontSize || 11);
   t.textColor = new Color(fgHex);
   return pill;
 }
@@ -145,17 +146,68 @@ function iconRow(parent, symbolName, label, value) {
   v.textColor = C.value;
 }
 
-// ---------- 主挂件 ----------
-async function buildWidget(j, isCached) {
-  const family = config.widgetFamily || "medium";
+// ---------- 小尺寸：155x155pt，只放一个大数字 ----------
+// 内容宽 = 155 - 左右 padding 12*2 = 131pt，全部按这个算：
+/// "0%" 36pt 约 45pt 宽；"重置 11月13日 17:03" 11pt 约 110pt 宽，都放得下。
+function buildSmall(j, isCached) {
+  const percentUsed = num(j?.percent_used, 0);
+  const percentRemaining = Math.max(0, Math.min(100, 100 - percentUsed));
+  const pill = statusPill(percentRemaining);
+
+  const w = new ListWidget();
+  w.backgroundColor = C.bg;
+  w.setPadding(12, 12, 10, 12);
+  w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
+  w.url = "scriptable:///run/" + encodeURIComponent(Script.name());
+
+  const top = w.addStack();
+  top.layoutHorizontally();
+  top.centerAlignContent();
+  const title = top.addText("Muse 用量");
+  title.font = Font.boldSystemFont(14);
+  title.textColor = C.title;
+  top.addSpacer();
+  addPill(top, pill.text, pill.bg, pill.fg, 10);
+
+  w.addSpacer(6);
+
+  const lab = w.addText("本周剩余");
+  lab.font = Font.systemFont(11);
+  lab.textColor = C.label;
+  lab.centerAlignText();
+
+  const big = w.addText(percentRemaining + "%");
+  big.font = Font.boldSystemFont(36);
+  big.textColor = C.title;
+  big.centerAlignText();
+
+  w.addSpacer(6);
+  drawBar(w, percentUsed / 100, 131, 7);
+
+  w.addSpacer(7);
+  const l1 = w.addText("已用 " + percentUsed + "%");
+  l1.font = Font.systemFont(11);
+  l1.textColor = C.label;
+  const l2 = w.addText("重置 " + fmtResetDate(j?.resets_at || j?.resets_at_text));
+  l2.font = Font.systemFont(11);
+  l2.textColor = C.label;
+
+  w.addSpacer();
+  const foot = w.addText("更新于 " + (fmtUpdated(j?.updated_at) || "—") + (isCached ? "（缓存）" : ""));
+  foot.font = Font.systemFont(9);
+  foot.textColor = C.footer;
+  return w;
+}
+
+// ---------- 中 / 大尺寸 ----------
+function buildMedium(j, isCached, family) {
   const percentUsed = num(j?.percent_used, 0);
   const percentRemaining = Math.max(0, Math.min(100, 100 - percentUsed));
   const ratio = percentUsed / 100;
   const pill = statusPill(percentRemaining);
   const extra = j?.additional_tokens || {};
-  const extraText = extra.left_label || "—";
-  const resetText = fmtResetDate(j?.resets_at || j?.resets_at_text);
-  const updatedText = fmtUpdated(j?.updated_at);
+  // 额外 tokens 只显示 "30B"，长串 "30B tokens left（已用 0%）" 会把行撑爆
+  const extraShort = String(extra.left_label || "—").replace(/ tokens left/i, "");
 
   const w = new ListWidget();
   w.backgroundColor = C.bg;
@@ -163,7 +215,6 @@ async function buildWidget(j, isCached) {
   w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
   w.url = "scriptable:///run/" + encodeURIComponent(Script.name());
 
-  // 标题行：Muse 用量 + 状态 pill
   const top = w.addStack();
   top.layoutHorizontally();
   top.centerAlignContent();
@@ -171,11 +222,10 @@ async function buildWidget(j, isCached) {
   title.font = Font.boldSystemFont(17);
   title.textColor = C.title;
   top.addSpacer();
-  addPill(top, pill.text, pill.bg, pill.fg);
+  addPill(top, pill.text, pill.bg, pill.fg, 11);
 
   w.addSpacer(10);
 
-  // 大数字：已用 / 剩余
   const nums = w.addStack();
   nums.layoutHorizontally();
   nums.bottomAlignContent();
@@ -203,29 +253,21 @@ async function buildWidget(j, isCached) {
   rv.rightAlignText();
 
   w.addSpacer(8);
-  drawBar(w, ratio, family === "small" ? 140 : family === "large" ? 320 : 290, 8);
+  drawBar(w, ratio, family === "large" ? 320 : 290, 8);
 
-  if (family === "small") {
-    w.addSpacer(8);
-    const s = w.addText("重置 " + resetText);
-    s.font = Font.systemFont(11);
-    s.textColor = C.label;
-  } else {
-    w.addSpacer(10);
-    iconRow(w, "timer", "剩余时间", countdownText(j?.resets_at));
-    w.addSpacer(6);
-    iconRow(w, "calendar", "重置时间", resetText);
-    w.addSpacer(6);
-    iconRow(w, "gift", "额外 tokens", extraText + "（已用 " + num(extra.percent_used, 0) + "%）");
-  }
+  w.addSpacer(10);
+  iconRow(w, "timer", "剩余时间", countdownText(j?.resets_at));
+  w.addSpacer(6);
+  iconRow(w, "calendar", "重置时间", fmtResetDate(j?.resets_at || j?.resets_at_text));
+  w.addSpacer(6);
+  iconRow(w, "gift", "额外 tokens", extraShort);
 
   w.addSpacer();
   const foot = w.addText(
-    "套餐 " + (j?.plan || "Free") + " · 更新于 " + (updatedText || "—") + (isCached ? "（缓存）" : "")
+    "套餐 " + (j?.plan || "Free") + " · 更新于 " + (fmtUpdated(j?.updated_at) || "—") + (isCached ? "（缓存）" : "")
   );
   foot.font = Font.systemFont(10);
   foot.textColor = C.footer;
-
   return w;
 }
 
@@ -255,11 +297,13 @@ async function main() {
       throw new Error("DATA_URL 还没改成你的 GitHub raw 地址");
     }
     const j = await fetchData();
-    widget = await buildWidget(j, false);
+    const family = config.widgetFamily || "small";
+    widget = family === "small" ? buildSmall(j, false) : buildMedium(j, false, family);
   } catch (e) {
     const cached = readCache();
     if (cached) {
-      widget = await buildWidget(cached, true);
+      const family = config.widgetFamily || "small";
+      widget = family === "small" ? buildSmall(cached, true) : buildMedium(cached, true, family);
     } else {
       widget = errorWidget(e.message || String(e));
     }
@@ -268,7 +312,7 @@ async function main() {
   if (config.runsInWidget) {
     Script.setWidget(widget);
   } else {
-    const fam = args.widgetParameter || "medium";
+    const fam = args.widgetParameter || "small";
     if (fam === "small") await widget.presentSmall();
     else if (fam === "large") await widget.presentLarge();
     else await widget.presentMedium();
