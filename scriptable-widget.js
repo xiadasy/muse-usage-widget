@@ -1,8 +1,9 @@
 // ============================================================
-// Muse 用量挂件（Scriptable）v3 — 暖米白卡，重点修小尺寸
-// v2 的问题：小尺寸里双大数字 + 长行塞不下，字被裁。
-// v3：小尺寸只放一个大数字 + 短行，全部按小组件实宽 155pt 算过；
-// 底色改成暖米色，配用户壁纸（米白猫窝那张）。
+// Muse 用量挂件（Scriptable）v4 — 小尺寸放进小猫咪
+// v3 的问题：v2 小尺寸双大数字 + 长行塞不下，字被裁。
+// v4：小尺寸用猫照片做底图（assets/cat.json，base64 存 GitHub，
+// 手机上只下载一次后缓存），底部压一张暖米卡片放数字；
+// 没拿到图时回退到 v3 的纯暖米版，不会白屏。
 //
 // 数据源不变：只读 GitHub raw JSON
 // https://raw.githubusercontent.com/xiadasy/muse-usage-widget/main/data/muse_usage.json
@@ -13,6 +14,8 @@
 // ============================================================
 
 const DATA_URL = "https://raw.githubusercontent.com/xiadasy/muse-usage-widget/main/data/muse_usage.json";
+const CAT_JSON_URL = "https://raw.githubusercontent.com/xiadasy/muse-usage-widget/main/assets/cat.json";
+const CAT_CACHE_FILE = "muse-cat.jpg";
 
 const TIMEOUT_SECONDS = 15;
 const CACHE_FILE = "muse-usage-cache.json";
@@ -99,6 +102,29 @@ async function fetchData() {
   return j;
 }
 
+// ---------- 猫咪底图：只下载一次，之后读缓存 ----------
+// 图片以 base64 存在 GitHub 的 assets/cat.json 里（公开仓库，
+// 任何人拿到链接都能解出这张猫照片）；介意的话把 CAT_JSON_URL
+// 换成本地文件，或直接删掉 loadCatImage 的调用走纯色版。
+async function loadCatImage() {
+  try {
+    const fm = FileManager.local();
+    const path = fm.joinPath(fm.libraryDirectory(), CAT_CACHE_FILE);
+    if (fm.fileExists(path)) return fm.readImage(path);
+    const req = new Request(CAT_JSON_URL + "?t=" + Date.now());
+    req.timeoutInterval = TIMEOUT_SECONDS;
+    const j = await req.loadJSON();
+    if (!j || !j.image_base64) return null;
+    const data = Data.fromBase64String(j.image_base64);
+    const img = Image.fromData(data);
+    if (!img) return null;
+    fm.writeImage(path, img);
+    return img;
+  } catch (e) {
+    return null;
+  }
+}
+
 // ---------- 组件 ----------
 function addPill(parent, text, bgHex, fgHex, fontSize) {
   const pill = parent.addStack();
@@ -146,10 +172,49 @@ function iconRow(parent, symbolName, label, value) {
   v.textColor = C.value;
 }
 
-// ---------- 小尺寸：155x155pt，只放一个大数字 ----------
+// ---------- 小尺寸 + 猫咪底图：上半截是猫，下半截暖米卡片 ----------
+// 卡片高约 78pt，猫脸在照片上半部，不会被卡片盖住。
+function buildSmallWithCat(j, isCached, catImage) {
+  const percentUsed = num(j?.percent_used, 0);
+  const percentRemaining = Math.max(0, Math.min(100, 100 - percentUsed));
+  const pill = statusPill(percentRemaining);
+
+  const w = new ListWidget();
+  w.backgroundImage = catImage;
+  w.setPadding(10, 10, 10, 10);
+  w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
+  w.url = "scriptable:///run/" + encodeURIComponent(Script.name());
+
+  w.addSpacer();
+
+  const card = w.addStack();
+  card.backgroundColor = C.bg;
+  card.cornerRadius = 12;
+  card.layoutVertically();
+  card.setPadding(8, 12, 8, 12);
+
+  const row = card.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
+  const big = row.addText(percentRemaining + "%");
+  big.font = Font.boldSystemFont(26);
+  big.textColor = C.title;
+  row.addSpacer();
+  addPill(row, pill.text, pill.bg, pill.fg, 10);
+
+  card.addSpacer(5);
+  drawBar(card, percentUsed / 100, 111, 6);
+  card.addSpacer(5);
+  const line = card.addText("Muse · 重置 " + fmtResetDate(j?.resets_at || j?.resets_at_text));
+  line.font = Font.systemFont(10);
+  line.textColor = C.label;
+  return w;
+}
+
+// ---------- 小尺寸（无图回退）：155x155pt，只放一个大数字 ----------
 // 内容宽 = 155 - 左右 padding 12*2 = 131pt，全部按这个算：
 /// "0%" 36pt 约 45pt 宽；"重置 11月13日 17:03" 11pt 约 110pt 宽，都放得下。
-function buildSmall(j, isCached) {
+function buildSmallPlain(j, isCached) {
   const percentUsed = num(j?.percent_used, 0);
   const percentRemaining = Math.max(0, Math.min(100, 100 - percentUsed));
   const pill = statusPill(percentRemaining);
@@ -298,12 +363,22 @@ async function main() {
     }
     const j = await fetchData();
     const family = config.widgetFamily || "small";
-    widget = family === "small" ? buildSmall(j, false) : buildMedium(j, false, family);
+    if (family === "small") {
+      const cat = await loadCatImage();
+      widget = cat ? buildSmallWithCat(j, false, cat) : buildSmallPlain(j, false);
+    } else {
+      widget = buildMedium(j, false, family);
+    }
   } catch (e) {
     const cached = readCache();
     if (cached) {
       const family = config.widgetFamily || "small";
-      widget = family === "small" ? buildSmall(cached, true) : buildMedium(cached, true, family);
+      if (family === "small") {
+        const cat = await loadCatImage();
+        widget = cat ? buildSmallWithCat(cached, true, cat) : buildSmallPlain(cached, true);
+      } else {
+        widget = buildMedium(cached, true, family);
+      }
     } else {
       widget = errorWidget(e.message || String(e));
     }
